@@ -1,8 +1,8 @@
-/* [isd] igmp-keep-alive-server v0.1 
+/* [isd] igmp-keep-alive-server v0.1
  * =================================
  * Idea spawned by Kim Daniel @BF-SD7
  * Code by arnvid@isd.no - ievil/isd
- */ 
+ */
 
 
 #include <getopt.h>
@@ -50,16 +50,18 @@ void usage(char * binname) {
 int main (int argc, char *argv[])
 {
   time_t now, current, last;
-  int fork_pid, real_pid, i;
-  int sockfd, mcast_dport, payload_len;
+  int fork_pid, real_pid, i, status;
+  int sockfd, sockmc, mcast_dport, payload_len;
   struct sockaddr_in mcast_dst;
+  struct sockaddr_in mcast_srv;
+  struct ip_mreq mcast_req;
   char *mcast_ip;
   unsigned char mcast_ttl;
   char *payload;
 
 //, done, upd_error;
- 
-  
+
+
   now = time(NULL);
   real_pid = getpid();
   strcpy(arg_interface, "eth0");
@@ -97,21 +99,47 @@ int main (int argc, char *argv[])
      exit(1);
   }
 
+  if ((sockmc = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP)) == -1) {
+     syslog(LOG_CRIT, "Unable to open socket fd ... bailing.. system panic!");
+     exit(1);
+  }
+
+
+  memset(&mcast_dst, 0, sizeof(mcast_dst));
+  memset(&mcast_req, 0, sizeof(struct ip_mreq));
+
+  mcast_dst.sin_family = AF_INET;
+  mcast_dst.sin_addr.s_addr = inet_addr(mcast_ip);
+  mcast_dst.sin_port = htons(mcast_dport);
+
+  mcast_srv.sin_family = PF_INET;
+  mcast_srv.sin_port = htons(mcast_dport);
+  mcast_srv.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  status = bind(sockmc, (struct sockaddr *)&mcast_srv, sizeof(struct sockaddr_in));
+  if ( status < 0 ) {
+      syslog(LOG_CRIT, "Unable to bind mcast server ... bailing.. system panic!");
+     exit(1);
+  }
+  mcast_req.imr_multiaddr.s_addr = inet_addr("239.0.0.1");
+  mcast_req.imr_interface.s_addr = INADDR_ANY;
+
+  status = setsockopt(sockmc, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const void *)&mcast_req, sizeof(struct ip_mreq));
+
   if (setsockopt(sockfd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &mcast_ttl, sizeof(mcast_ttl)) < 0) {
      syslog(LOG_CRIT, "Unable to set socket options ... bailing.. system panic!");
      exit(1);
   }
-  memset(&mcast_dst, 0, sizeof(mcast_dst));
 
-  mcast_dst.sin_family = AF_INET; 
-  mcast_dst.sin_addr.s_addr = inet_addr(mcast_ip);
-  mcast_dst.sin_port = htons(mcast_dport);
 
- 
   syslog(LOG_NOTICE, "System forked successfully, starting igmp keep alive server on %s.", arg_interface);
   do {
     current = time(NULL);
     if ( last+120 < current ) {
+      syslog(LOG_NOTICE, "Sending IGMP Join for %s.", mcast_ip);
+      status = setsockopt(sockmc, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const void *)&mcast_req, sizeof(struct ip_mreq));
+//      if ( status < 0 )
+//        syslog(LOG_CRIT, "Failed to send IGMP Join ... bailing.. system panic!");
       syslog(LOG_NOTICE, "Sending IGMP Keep Alive to %s.", mcast_ip);
       last = time(NULL);
       if (sendto(sockfd, payload, payload_len, 0, (struct sockaddr *) &mcast_dst, sizeof(mcast_dst)) != payload_len) {
@@ -121,8 +149,9 @@ int main (int argc, char *argv[])
       sleep(120);
     }
   } while(1);
- 
+
+  shutdown(sockmc, 2);
+  close(sockmc);
   exit(0);
   return 0;                                     /* Keep some compilers happy */
 }
-
